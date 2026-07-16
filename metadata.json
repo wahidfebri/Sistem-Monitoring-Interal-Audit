@@ -1,0 +1,6 @@
+{
+  "name": "SIAMS - SIP Internal Audit Monitoring Portal",
+  "description": "Pusat data audit nasional PT. Solusi Integrasi Pratama secara real-time untuk pemantauan manajemen, direksi, regional manager, dan branch manager.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
