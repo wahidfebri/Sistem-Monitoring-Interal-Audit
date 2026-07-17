@@ -18,3 +18,20 @@ export interface AuditItem {
   sk: string;
   status: AuditStatus;
 }
+
+export type SanctionStatus = "Active" | "Inactive" | "Terminated";
+
+export interface SanctionItem {
+  id: string | number;
+  auditor: string;
+  periodeAwal: string;
+  periodeAkhir: string;
+  region: string;
+  wilayah: string;
+  namaPic: string;
+  jenisTemuan: string;
+  rekomendasiSanksi: string;
+  implementasiSanksi: string;
+  catatanTambahan: string;
+  statusSanksi: SanctionStatus;
+}

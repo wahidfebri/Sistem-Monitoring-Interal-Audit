@@ -3,12 +3,13 @@ import path from "path";
 import dotenv from "dotenv";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
-import { generateAuditData } from "./src/data";
-import { AuditItem } from "./src/types";
+import { generateAuditData, generateSanctionData } from "./src/data";
+import { AuditItem, SanctionItem } from "./src/types";
 
 dotenv.config();
 
 const DATA_FILE = path.join(process.cwd(), "audit_data.json");
+const SANCTION_DATA_FILE = path.join(process.cwd(), "sanction_data.json");
 
 // Helper function to normalize any date string format to DD/MM/YYYY (Tanggal/Bulan/Tahun)
 function normalizeDate(dateStr: string | null | undefined): string {
@@ -107,8 +108,54 @@ function saveAuditData(data: AuditItem[]) {
   }
 }
 
+// Helper functions for sanctions data
+function loadSanctionData(): SanctionItem[] {
+  let items: SanctionItem[] = [];
+  try {
+    if (fs.existsSync(SANCTION_DATA_FILE)) {
+      const content = fs.readFileSync(SANCTION_DATA_FILE, "utf-8");
+      items = JSON.parse(content);
+    } else {
+      items = generateSanctionData();
+    }
+  } catch (err) {
+    console.error("Error loading sanction data:", err);
+    items = generateSanctionData();
+  }
+
+  // Normalize dates for all items
+  let hasChanges = false;
+  const normalized = items.map(item => {
+    const normStart = normalizeDate(item.periodeAwal);
+    const normEnd = normalizeDate(item.periodeAkhir);
+    if (item.periodeAwal !== normStart || item.periodeAkhir !== normEnd) {
+      hasChanges = true;
+    }
+    return {
+      ...item,
+      periodeAwal: normStart,
+      periodeAkhir: normEnd
+    };
+  });
+
+  if (hasChanges) {
+    saveSanctionData(normalized);
+  }
+
+  return normalized;
+}
+
+function saveSanctionData(data: SanctionItem[]) {
+  try {
+    fs.writeFileSync(SANCTION_DATA_FILE, JSON.stringify(data, null, 2), "utf-8");
+  } catch (err) {
+    console.error("Error saving sanction data:", err);
+  }
+}
+
 // Initialize our mock database using the file-backed persistence
 let auditDb: AuditItem[] = loadAuditData();
+let sanctionDb: SanctionItem[] = loadSanctionData();
 
 const app = express();
 const PORT = 3000;
@@ -205,6 +252,102 @@ app.delete("/api/audits/:id", (req, res) => {
   
   saveAuditData(auditDb);
   res.json({ success: true, message: "Audit item deleted successfully" });
+});
+
+// Get all sanction items
+app.get("/api/sanctions", (req, res) => {
+  res.json(sanctionDb);
+});
+
+// Add a single sanction item (Manual input)
+app.post("/api/sanctions", (req, res) => {
+  const newItem: SanctionItem = req.body;
+  if (!newItem.region || !newItem.wilayah || !newItem.namaPic || !newItem.jenisTemuan || !newItem.rekomendasiSanksi || !newItem.auditor || !newItem.periodeAwal || !newItem.periodeAkhir) {
+    return res.status(400).json({ error: "Invalid sanction data" });
+  }
+  // Normalize the dates
+  newItem.periodeAwal = normalizeDate(newItem.periodeAwal);
+  newItem.periodeAkhir = normalizeDate(newItem.periodeAkhir);
+
+  // Generate ID if not provided
+  if (!newItem.id) {
+    const maxId = sanctionDb.reduce((max, item) => typeof item.id === "number" ? Math.max(max, item.id) : max, 0);
+    newItem.id = maxId + 1;
+  }
+  sanctionDb.unshift(newItem);
+  saveSanctionData(sanctionDb);
+  res.status(201).json(newItem);
+});
+
+// Add bulk sanction items (Excel upload)
+app.post("/api/sanctions/bulk", (req, res) => {
+  const newItems: SanctionItem[] = req.body;
+  if (!Array.isArray(newItems)) {
+    return res.status(400).json({ error: "Data must be an array" });
+  }
+
+  let maxId = sanctionDb.reduce((max, item) => typeof item.id === "number" ? Math.max(max, item.id) : max, 0);
+  
+  const formattedItems = newItems.map((item, idx) => {
+    let finalStatus = item.statusSanksi || "Active";
+    const norm = String(finalStatus).trim().toLowerCase();
+    if (norm === "selesai" || norm === "terminated") finalStatus = "Terminated";
+    else if (norm === "on progress" || norm === "active") finalStatus = "Active";
+    else if (norm === "void" || norm === "inactive") finalStatus = "Inactive";
+    else finalStatus = "Active";
+
+    return {
+      ...item,
+      id: item.id || (maxId + idx + 1),
+      periodeAwal: normalizeDate(item.periodeAwal),
+      periodeAkhir: normalizeDate(item.periodeAkhir),
+      statusSanksi: finalStatus as any
+    };
+  });
+
+  sanctionDb = [...formattedItems, ...sanctionDb];
+  saveSanctionData(sanctionDb);
+  res.status(201).json({ count: formattedItems.length, items: formattedItems });
+});
+
+// Update single sanction item (Kelola/Edit)
+app.put("/api/sanctions/:id", (req, res) => {
+  const { id } = req.params;
+  const updatedData = req.body;
+  
+  const parsedId = isNaN(Number(id)) ? id : Number(id);
+  const sanctionIndex = sanctionDb.findIndex(s => s.id === parsedId);
+  
+  if (sanctionIndex === -1) {
+    return res.status(404).json({ error: "Sanction item not found" });
+  }
+  
+  sanctionDb[sanctionIndex] = {
+    ...sanctionDb[sanctionIndex],
+    ...updatedData,
+    periodeAwal: normalizeDate(updatedData.periodeAwal),
+    periodeAkhir: normalizeDate(updatedData.periodeAkhir),
+    id: parsedId
+  };
+  
+  saveSanctionData(sanctionDb);
+  res.json(sanctionDb[sanctionIndex]);
+});
+
+// Delete single sanction item (Hapus)
+app.delete("/api/sanctions/:id", (req, res) => {
+  const { id } = req.params;
+  const parsedId = isNaN(Number(id)) ? id : Number(id);
+  
+  const initialLength = sanctionDb.length;
+  sanctionDb = sanctionDb.filter(s => s.id !== parsedId);
+  
+  if (sanctionDb.length === initialLength) {
+    return res.status(404).json({ error: "Sanction item not found" });
+  }
+  
+  saveSanctionData(sanctionDb);
+  res.json({ success: true, message: "Sanction item deleted successfully" });
 });
 
 // Vite middleware setup for full-stack integration
